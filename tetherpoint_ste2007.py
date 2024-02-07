@@ -4,11 +4,12 @@
 # TODO: issue with rotate(180): command sent, display not rotating
 # TODO: issue with contrast & reg_ratio: changing values, display is not changing
 # TODO: remove debug print()
+_debug = True
 
 """
-BSD 2-Clause License
+BSD 3-Clause License
 
-Copyright (c) 2024, mattklapman
+Copyright (c) 2024, mattklapman and tetherpoint
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -19,6 +20,10 @@ modification, are permitted provided that the following conditions are met:
 2. Redistributions in binary form must reproduce the above copyright notice,
    this list of conditions and the following disclaimer in the documentation
    and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -79,6 +84,7 @@ STE2007_ICON_MODE_OFF = const(0xFC)
 #STE2007_TEST_MODE8 = const(0xFD) # do not use
 
 class STE2007(framebuf.FrameBuffer):
+    # max SPI clock is 4MHz per data sheet
     def __init__(self, spi, cs=None, rs=None, rotation: int=0, inverse: boolean=False, contrast=0x10, regulation_ratio=0x04) -> None:
         # override framebuf parent
         self._data = bytearray(9) # used to send bytes with DC bit
@@ -91,8 +97,9 @@ class STE2007(framebuf.FrameBuffer):
             self.rs = rs
             rs.init(rs.OUT, value=0)
 
-        self.buffer = bytearray(96*72//8)
-        super().__init__(self.buffer, 96, 72, framebuf.MONO_VLSB)
+        # needs to add 4 more rows to address the last 48 frame buffer bytes
+        self.buffer = bytearray(96*(68+4)//8)
+        super().__init__(self.buffer, 96, 68+4, framebuf.MONO_VLSB)
         self.fill(0) # clear buffer
         self.reset()
         self.show() # clear DDRAM pages 0~8
@@ -149,11 +156,6 @@ class STE2007(framebuf.FrameBuffer):
     def sleep(self, on: boolean=True) -> None:
         # enable/disable low power mode (turns off visible display)
         # keeps display RAM & register settings
-        # From datasheet:
-        #   stops internal oscillation circuit;
-        #   stops the built-in power circuits;
-        #   stops the LCD driving circuits and keeps the common and segment outputs at VSS.
-        #   After exiting Power Save mode, the settings will return to be as they were before.
         if on:
             self._write_command([STE2007_DISPLAY_OFF, STE2007_DISPLAY_ALL_PIXELS_ON])
             #time.sleep_ms(250) # can physically remove power after 250ms to POWER OFF
@@ -173,13 +175,14 @@ class STE2007(framebuf.FrameBuffer):
     def _write(self, dc, val: bytearray) -> None:
         # send 9 bytes for every 1 to 8 bytes to include D/C bit and fit in mod 8
         # fill empty bytes with NOPs
-        print()
-        print(dc, len(val), ":", end='')
-        if dc == 0:
-            print('[{}]'.format(', '.join(hex(x) for x in val)))
-            for x in range(0, len(val)):
-                print(f'{val[x]:08b}, ', end='')
+        if _debug:
             print()
+            print(dc, len(val), ":", end='')
+            if dc == 0:
+                print('[{}]'.format(', '.join(hex(x) for x in val)))
+                for x in range(0, len(val)):
+                    print(f'{val[x]:08b}, ', end='')
+                print()
 
         for c in range (0, len(val), 8):
             chunk = val[c:c+8]
@@ -191,17 +194,19 @@ class STE2007(framebuf.FrameBuffer):
                 if dc:
                     data[i] |= (1 << (7-i))
                 if i == 7:
-                    # no byte split
+                    # no byte split needed
                     data[i+1] = chunk[i]
                 else:
                     # split byte
                     data[i]   |=  chunk[i] >> (i+1)
                     data[i+1] |= (chunk[i] << (7-i)) & 0xFF
             # send chunk
-            if dc == 0:
-                for x in range(0, len(data)):
-                    print(f'{data[x]:08b}, ', end='')
-                print()
+            if _debug:
+                if dc == 0:
+                    for x in range(0, len(data)):
+                        print(f'{data[x]:08b}, ', end='')
+                    print()
+
             self.cs.value(0)
             self.spi.write(data)
             self.cs.value(1)
